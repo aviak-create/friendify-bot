@@ -1,84 +1,135 @@
-import os
 import json
 import random
-from flask import Flask, request
-from telegram import Bot
+from telegram import Update, InputMediaPhoto
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-app = Flask(__name__)
-
-# Telegram bot token from Render environment variable
-TOKEN = os.getenv("BOT_TOKEN")
-bot = Bot(token=TOKEN)
-
-# --- Load message data ---
-with open("data/basic.json", "r", encoding="utf-8") as f:
-    BASIC = json.load(f)
-with open("data/vip.json", "r", encoding="utf-8") as f:
-    VIP = json.load(f)
-
-# --- User data store ---
-# chat_id : {"plan": "basic"/"vip", "messages_used": int, "images_used": int}
-user_data = {}
+# -----------------------------
+# Configuration
+# -----------------------------
+TELEGRAM_TOKEN = "8286419006:AAFQ7Pj0qDvt4wc7CdjdgOq59ZGS5pI5pUo"
+UPGRADE_LINK = "https://rzp.io/rzp/D0H2ymY7"
+MAX_BASIC_MESSAGES = 25
+MAX_BASIC_IMAGES = 2
 
 # Lusty/horny keywords
-lusty_keywords = ["horny", "lust", "sexy", "intimate", "naked"]
+HORNY_KEYWORDS = ["horny","lust","sexy","naughty","intimate","fuck","cum","cock","boobs","pussy","dick","sex","hot"]
 
-# Payment links
-PAYMENT_LINK_49 = "https://rzp.io/rzp/39ETVZ1"
-UPGRADE_LINK_119 = "https://rzp.io/rzp/DMsjkvt"
-VIP_LINK_199 = "https://rzp.io/rzp/qgH40oy"
+# -----------------------------
+# Load JSON message packs
+# -----------------------------
+with open("data/basic.json", "r", encoding="utf-8") as f:
+    basic_pack = json.load(f)
 
-@app.route("/")
-def home():
-    return "Friendify AI Bot is running!"
+with open("data/vip.json", "r", encoding="utf-8") as f:
+    vip_pack = json.load(f)
 
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    if not data or "message" not in data:
-        return "ok"
+# -----------------------------
+# User tracking
+# -----------------------------
+# Structure: {user_id: {"pack": "basic"/"vip", "used_msgs": int, "used_imgs": int}}
+paid_users = {}
 
-    chat_id = data["message"]["chat"]["id"]
-    text = data["message"].get("text", "").lower().strip()
+# -----------------------------
+# Helpers
+# -----------------------------
+def check_paid(update: Update):
+    user_id = str(update.effective_user.id)
+    if user_id not in paid_users:
+        update.message.reply_text(
+            "💌 You need to pay ₹49 first to chat with me!\nVisit our website to get started."
+        )
+        return False
+    return True
 
-    # --- Step 1: enforce payment ---
-    if chat_id not in user_data:
-        # Assume user paid 49₹ before entering Telegram (we only allow 49₹ initially)
-        # Here you can integrate actual payment verification if needed
-        user_data[chat_id] = {"plan": "basic", "messages_used": 0, "images_used": 0}
-        bot.send_message(chat_id, f"🎉 Welcome to Friendify AI! You have 25 messages + 2 images in your 49₹ pack.\nStart chatting now!")
-        return "ok"
+def get_random_reply(pack):
+    messages = pack.get("messages", [])
+    return random.choice(messages) if messages else "🤖"
 
-    user = user_data[chat_id]
+def get_random_image(pack):
+    images = pack.get("images", [])
+    return random.choice(images) if images else None
 
-    # --- Step 2: check for lusty/horny text ---
-    if any(word in text for word in lusty_keywords):
-        if user["plan"] == "basic":
-            bot.send_message(chat_id, f"🔥 For intimate chats, upgrade to VIP 199₹ here: {VIP_LINK_199}")
-            return "ok"
+def is_horny(message_text):
+    text = message_text.lower()
+    for word in HORNY_KEYWORDS:
+        if word in text:
+            return True
+    return False
 
-    # --- Step 3: check pack limits ---
-    if user["plan"] == "basic":
-        if user["messages_used"] >= 25 and user["images_used"] >= 2:
-            bot.send_message(chat_id, f"💌 Your 49₹ pack is over. Upgrade to 119₹ for more messages and images: {UPGRADE_LINK_119}")
-            return "ok"
+def send_upgrade_prompt(update: Update):
+    msg = f"""💌 Your pack has ended or restricted for intimate chats!  
+Want to continue our fun & steamy chat? 😉  
+Upgrade to VIP for unlimited messages & special content 🔥  
+💳 Buy Now ₹119 → {UPGRADE_LINK}"""
+    update.message.reply_text(msg)
 
-    # --- Step 4: send response (text or image) ---
-    content = BASIC if user["plan"] == "basic" else VIP
+# -----------------------------
+# Handlers
+# -----------------------------
+def start(update: Update, context: CallbackContext):
+    user_id = str(update.effective_user.id)
+    # Add new paid user if redirected from website (manual mapping for demo)
+    if user_id not in paid_users:
+        paid_users[user_id] = {"pack": "basic", "used_msgs": 0, "used_imgs": 0}
+    update.message.reply_text(
+        "Welcome to Friendify AI 🤖\nYou get 25 text messages + 2 images in your starter pack! Enjoy!"
+    )
 
-    if random.random() < 0.8:  # 80% chance text
-        msg = random.choice(content["messages"])
-        bot.send_message(chat_id, msg)
-        if user["plan"] == "basic":
-            user["messages_used"] += 1
-    else:  # 20% chance image
-        img = random.choice(content["images"])
-        bot.send_photo(chat_id, photo=img)
-        if user["plan"] == "basic":
-            user["images_used"] += 1
+def handle_message(update: Update, context: CallbackContext):
+    if not check_paid(update):
+        return
 
-    return "ok"
+    user_id = str(update.effective_user.id)
+    user_data = paid_users[user_id]
 
+    # Detect horny/lusty messages
+    if user_data["pack"] == "basic" and is_horny(update.message.text):
+        send_upgrade_prompt(update)
+        return
+
+    # Check message limit
+    if user_data["pack"] == "basic" and user_data["used_msgs"] >= MAX_BASIC_MESSAGES:
+        send_upgrade_prompt(update)
+        return
+
+    # Determine reply
+    pack = basic_pack if user_data["pack"] == "basic" else vip_pack
+    reply_text = get_random_reply(pack)
+    update.message.reply_text(reply_text)
+
+    # Increment counters
+    if user_data["pack"] == "basic":
+        user_data["used_msgs"] += 1
+        # Send image if available and not exceeded
+        if user_data["used_imgs"] < MAX_BASIC_IMAGES:
+            img_url = get_random_image(pack)
+            if img_url:
+                update.message.reply_photo(img_url)
+                user_data["used_imgs"] += 1
+
+def upgrade_to_vip(update: Update, context: CallbackContext):
+    user_id = str(update.effective_user.id)
+    if not check_paid(update):
+        return
+    paid_users[user_id]["pack"] = "vip"
+    update.message.reply_text(
+        "🎉 You are now VIP! Enjoy unlimited chats and images 😘"
+    )
+
+# -----------------------------
+# Main
+# -----------------------------
+def main():
+    updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("vip", upgrade_to_vip))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+    updater.start_polling()
+    print("Bot is running...")
+    updater.idle()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    main()

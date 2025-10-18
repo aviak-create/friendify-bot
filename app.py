@@ -30,8 +30,11 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("🤖 Bot is polling...")
-    # Safer polling for Render deployment
-    await app.run_polling()
+    # Start polling (awaited inside the task)
+    await app.start()
+    await app.updater.start_polling()
+    # keep the bot alive
+    await asyncio.Event().wait()
 
 # ---------------- SIMPLE HTTP SERVER FOR RENDER ---------------- #
 PORT = int(os.environ.get("PORT", 10000))  # Render provides PORT env variable
@@ -52,4 +55,14 @@ threading.Thread(target=start_server, daemon=True).start()
 
 # ---------------- ENTRY POINT ---------------- #
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        loop = asyncio.get_running_loop()
+        print("⚙️ Using existing event loop")
+        loop.create_task(main())
+    except RuntimeError:
+        # If no loop is running (unlikely on Render)
+        print("🌀 Creating new event loop")
+        asyncio.run(main())
+    # Keep the script alive
+    loop = asyncio.get_event_loop()
+    loop.run_forever()

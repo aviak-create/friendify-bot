@@ -20,7 +20,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"You said: {text}")
 
 # ---------------- TELEGRAM BOT MAIN FUNCTION ---------------- #
-async def main():
+async def run_bot():
     print("🚀 Starting Friendify Bot...")
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -29,12 +29,12 @@ async def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("🤖 Bot is polling...")
-    # Start polling (awaited inside the task)
+    # Initialize and start polling
+    await app.initialize()
     await app.start()
     await app.updater.start_polling()
-    # keep the bot alive
-    await asyncio.Event().wait()
+    print("🤖 Bot is polling...")
+    await asyncio.Event().wait()  # Keep the bot alive
 
 # ---------------- SIMPLE HTTP SERVER FOR RENDER ---------------- #
 PORT = int(os.environ.get("PORT", 10000))  # Render provides PORT env variable
@@ -57,12 +57,12 @@ threading.Thread(target=start_server, daemon=True).start()
 if __name__ == "__main__":
     try:
         loop = asyncio.get_running_loop()
-        print("⚙️ Using existing event loop")
-        loop.create_task(main())
     except RuntimeError:
-        # If no loop is running (unlikely on Render)
-        print("🌀 Creating new event loop")
-        asyncio.run(main())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    # Schedule the bot task on the existing loop
+    loop.create_task(run_bot())
+
     # Keep the script alive
-    loop = asyncio.get_event_loop()
     loop.run_forever()

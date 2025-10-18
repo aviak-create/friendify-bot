@@ -30,10 +30,8 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("🤖 Bot is polling...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
+    # Safer polling for Render deployment
+    await app.run_polling()
 
 # ---------------- SIMPLE HTTP SERVER FOR RENDER ---------------- #
 PORT = int(os.environ.get("PORT", 10000))  # Render provides PORT env variable

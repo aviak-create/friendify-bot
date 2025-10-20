@@ -1,8 +1,6 @@
 import os
 import random
 import logging
-import asyncio
-from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -11,12 +9,6 @@ TOKEN = "8286419006:AAFQ7Pj0qDvt4wc7CdjdgOq59ZGS5pI5pUo"
 UPGRADE_LINK = "https://rzp.io/rzp/D0H2ymY7"
 FREE_MESSAGE_LIMIT = 25
 FREE_IMAGE_LIMIT = 2
-
-# ===================== FLASK APP =====================
-app = Flask(__name__)
-
-# ===================== TELEGRAM APP =====================
-telegram_app = Application.builder().token(TOKEN).build()
 
 # ===================== LOGGING =====================
 logging.basicConfig(level=logging.INFO)
@@ -101,30 +93,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error in handle_photo: {e}")
 
-# ===================== ADD HANDLERS =====================
+# ===================== SETUP TELEGRAM APP =====================
+telegram_app = Application.builder().token(TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# ===================== FLASK ROUTES =====================
-@app.route("/")
-def home():
-    return "Friendify AI Bot is live 💖"
-
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    """Telegram webhook route"""
-    try:
-        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-        # Schedule async processing without blocking Flask
-        asyncio.create_task(telegram_app.process_update(update))
-        return "ok"
-    except Exception as e:
-        logging.error(f"Webhook error: {e}")
-        return "Error", 500
-
-# ===================== MAIN =====================
+# ===================== RUN WEBHOOK =====================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    logging.info(f"Starting Flask app on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    PORT = int(os.environ.get("PORT", 10000))
+    logging.info(f"Starting bot on port {PORT}")
+
+    telegram_app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"https://friendify-bot.onrender.com/{TOKEN}"
+    )

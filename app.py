@@ -1,20 +1,17 @@
 import os
 import random
 import logging
-from datetime import date
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ===================== CONFIG =====================
+# ===================== BOT CONFIG =====================
 TOKEN = "8286419006:AAFQ7Pj0qDvt4wc7CdjdgOq59ZGS5pI5pUo"
-UPGRADE_LINK_49 = "https://rzp.io/rzp/D0H2ymY7"   # 49₹ link
-UPGRADE_LINK_119 = "https://rzp.io/rzp/D0H2ymY7"  # 119₹ link
-DAILY_MESSAGE_LIMIT = 25
-DAILY_IMAGE_LIMIT = 2
+UPGRADE_LINK = "https://rzp.io/rzp/D0H2ymY7"
+FREE_TEXT_LIMIT = 25
+FREE_IMAGE_LIMIT = 2
+VIP_TEXT_LIMIT = 9999  # unlimited
 VIP_IMAGE_LIMIT = 5
-
-FLIRTY_KEYWORDS = ["sexy", "horny", "hot", "naughty", "kiss", "fuck", "seduce"]
 
 # ===================== FLASK APP =====================
 app = Flask(__name__)
@@ -25,144 +22,140 @@ telegram_app = Application.builder().token(TOKEN).build()
 # ===================== LOGGING =====================
 logging.basicConfig(level=logging.INFO)
 
-# ===================== USER DATA =====================
-user_data = {}  # {user_id: {"messages":0,"images":0,"tier":"basic/vip","last_payment_day":date}}
+# ===================== DATA FILES =====================
+DATA_FOLDER = "data"
+BASIC_TEXT_FILE = os.path.join(DATA_FOLDER, "basic.txt")
+VIP_TEXT_FILE = os.path.join(DATA_FOLDER, "vip.txt")
+BASIC_IMAGES_FILE = os.path.join(DATA_FOLDER, "images_basic.txt")
+VIP_IMAGES_FILE = os.path.join(DATA_FOLDER, "images_vip.txt")
 
-# ===================== HELPERS =====================
-def get_text_reply(user_info):
-    if user_info["tier"] == "vip":
-        file = "data/vip.txt"
-    else:
-        file = "data/basic.txt"
-    with open(file) as f:
-        replies = f.read().splitlines()
-    return random.choice(replies)
+def load_file(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return [line.strip() for line in f if line.strip()]
+    return []
 
-def get_image_url(user_info):
-    if user_info["tier"] == "vip":
-        limit = VIP_IMAGE_LIMIT
-        file = "data/images_vip.txt"
-    else:
-        limit = DAILY_IMAGE_LIMIT
-        file = "data/images_basic.txt"
+BASIC_REPLIES = load_file(BASIC_TEXT_FILE)
+VIP_REPLIES = load_file(VIP_TEXT_FILE)
+BASIC_IMAGES = load_file(BASIC_IMAGES_FILE)
+VIP_IMAGES = load_file(VIP_IMAGES_FILE)
 
-    if user_info["images"] >= limit:
-        return None
+# ===================== DATA STORAGE =====================
+# user_data structure: {user_id: {"tier": "free"/"vip", "texts": int, "images": int}}
+user_data = {}
 
-    with open(file) as f:
-        urls = f.read().splitlines()
-    user_info["images"] += 1
-    return random.choice(urls)
-
-def reset_daily(user_info):
-    today = date.today()
-    if user_info.get("last_payment_day") != today:
-        user_info["messages"] = 0
-        user_info["images"] = 0
-        user_info["last_payment_day"] = today
+# ===================== KEYWORDS =====================
+FLIRTY_KEYWORDS = ["sexy", "horny", "flirt", "kiss", "baby"]  # lowercase
 
 # ===================== COMMAND HANDLER =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if user_id not in user_data:
-        user_data[user_id] = {"messages":0,"images":0,"tier":None,"last_payment_day":None}
-
+    user_data[user_id] = {"tier": "free", "texts": 0, "images": 0}
     await update.message.reply_text(
-        f"💞 Welcome to Friendify AI!\n"
-        f"You need to pay 49₹ to start chatting.\n"
-        f"Pay here 👉 {UPGRADE_LINK_49}"
+        "💞 Welcome to Friendify AI!\n"
+        "You need to pay 49₹ to start chatting.\n"
+        f"Upgrade here 👉 {UPGRADE_LINK}"
     )
 
 # ===================== MESSAGE HANDLER =====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    text = update.message.text
+    text = update.message.text.lower()
 
     if user_id not in user_data:
-        user_data[user_id] = {"messages":0,"images":0,"tier":None,"last_payment_day":None}
-    
+        # Force user to pay first
+        await update.message.reply_text(
+            f"💔 You cannot chat without subscribing.\nPay 49₹ here 👉 {UPGRADE_LINK}"
+        )
+        return
+
     user_info = user_data[user_id]
 
-    # ====== Paid check ======
-    if user_info["tier"] is None:
-        await update.message.reply_text(
-            f"💳 You must pay 49₹ to start chatting.\nPay here 👉 {UPGRADE_LINK_49}"
-        )
-        return
-
-    # ====== Reset daily ======
-    reset_daily(user_info)
-
-    # ====== Flirty trigger ======
-    if any(word in text.lower() for word in FLIRTY_KEYWORDS):
+    # Check if flirty keyword used
+    if any(k in text for k in FLIRTY_KEYWORDS):
         user_info["tier"] = "vip"
-        user_info["messages"] = 0
+        user_info["texts"] = 0
         user_info["images"] = 0
-        user_info["last_payment_day"] = date.today()
         await update.message.reply_text(
-            f"🔥 Flirty detected! You’re now VIP for today with unlimited chat & 5 images 💕\n{UPGRADE_LINK_119}"
+            f"🔥 Flirty message detected! You've unlocked VIP for today.\n{UPGRADE_LINK}"
         )
         return
 
-    # ====== Check message limit for basic ======
-    if user_info["tier"] == "basic" and user_info["messages"] >= DAILY_MESSAGE_LIMIT:
+    # Determine tier limits
+    if user_info["tier"] == "free":
+        limit_texts = FREE_TEXT_LIMIT
+        replies_list = BASIC_REPLIES
+    else:
+        limit_texts = VIP_TEXT_LIMIT
+        replies_list = VIP_REPLIES
+
+    # Check text limit
+    if user_info["texts"] >= limit_texts:
         await update.message.reply_text(
-            f"💬 You’ve reached your 25 messages limit for today.\n"
-            f"Upgrade to VIP 119₹ for unlimited messages & 5 images 💕\n{UPGRADE_LINK_119}"
+            f"💔 You’ve reached your daily text limit.\nUpgrade VIP for more 💕\n{UPGRADE_LINK}"
         )
         return
 
-    # ====== Send reply ======
-    user_info["messages"] += 1
-    reply = get_text_reply(user_info)
-    await update.message.reply_text(f"💬 Friendify AI: {reply}")
+    # Increment text counter and reply
+    user_info["texts"] += 1
+    reply = random.choice(replies_list)
+    await update.message.reply_text(reply)
 
 # ===================== IMAGE HANDLER =====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+
     if user_id not in user_data:
-        user_data[user_id] = {"messages":0,"images":0,"tier":None,"last_payment_day":None}
+        await update.message.reply_text(
+            f"💔 You cannot send images without subscribing.\nPay 49₹ here 👉 {UPGRADE_LINK}"
+        )
+        return
 
     user_info = user_data[user_id]
 
-    if user_info["tier"] is None:
+    if user_info["tier"] == "free":
+        limit_images = FREE_IMAGE_LIMIT
+        images_list = BASIC_IMAGES
+    else:
+        limit_images = VIP_IMAGE_LIMIT
+        images_list = VIP_IMAGES
+
+    if user_info["images"] >= limit_images:
         await update.message.reply_text(
-            f"💳 You must pay 49₹ to use images.\nPay here 👉 {UPGRADE_LINK_49}"
+            f"📸 You’ve reached your daily image limit.\nUpgrade VIP for more 💕\n{UPGRADE_LINK}"
         )
         return
 
-    reset_daily(user_info)
-
-    url = get_image_url(user_info)
-    if not url:
-        await update.message.reply_text(
-            f"📸 You’ve used all your images for today.\nUpgrade to VIP 119₹ for 5 images/day 💕\n{UPGRADE_LINK_119}"
-        )
-        return
-
-    await update.message.reply_text(url)
+    # Increment image counter and reply with random image
+    user_info["images"] += 1
+    if images_list:
+        reply_image = random.choice(images_list)
+        await update.message.reply_text(f"Here you go! {reply_image}")
+    else:
+        await update.message.reply_text("😍 Wow! You look amazing!")
 
 # ===================== ADD HANDLERS =====================
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# ===================== FLASK ROUTES =====================
+# ===================== FLASK WEBHOOK =====================
 @app.route("/")
 def home():
     return "Friendify AI Bot is live 💖"
 
 @app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
+def webhook():
+    from asyncio import get_event_loop
+
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    await telegram_app.process_update(update)
+    loop = get_event_loop()
+    loop.create_task(telegram_app.process_update(update))
     return "ok"
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    telegram_app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 10000)),
-        webhook_url=f"https://friendify-bot.onrender.com/{TOKEN}"
-    )
+    logging.info(f"Starting bot on port {port}")
+    telegram_app.bot.set_webhook(f"https://friendify-bot.onrender.com/{TOKEN}")
+    app.run(host="0.0.0.0", port=port)

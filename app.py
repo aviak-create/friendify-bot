@@ -1,129 +1,115 @@
-import asyncio
 import os
-import json
 import random
-import threading
+import logging
+from flask import Flask, request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ---------------- BOT TOKEN ---------------- #
+# ===================== BOT CONFIG =====================
 TOKEN = "8286419006:AAFQ7Pj0qDvt4wc7CdjdgOq59ZGS5pI5pUo"
+UPGRADE_LINK = "https://rzp.io/rzp/D0H2ymY7"
+FREE_MESSAGE_LIMIT = 25
+FREE_IMAGE_LIMIT = 2
 
-# ---------------- DATA LOADING ---------------- #
-with open("data/basic.json", "r", encoding="utf-8") as f:
-    BASIC_REPLIES = json.load(f)
+# ===================== FLASK APP =====================
+app = Flask(__name__)
 
-with open("data/vip.json", "r", encoding="utf-8") as f:
-    VIP_REPLIES = json.load(f)
+# ===================== TELEGRAM APP =====================
+telegram_app = Application.builder().token(TOKEN).build()
 
-# ---------------- USER DATA ---------------- #
-# Tracks messages/images sent per user
-USER_STATS = {}  # {user_id: {"type":"49"/"119"/"vip","msg_count":int,"img_count":int}}
+# ===================== LOGGING =====================
+logging.basicConfig(level=logging.INFO)
 
-# Payment links
-PACK_49_LINK = "https://friendifyai.netlify.app"  # 49 pack landing page
-PACK_119_LINK = "https://rzp.io/rzp/D0H2ymY7"     # 119 pack Razorpay link
+# ===================== SAMPLE REPLIES =====================
+BASIC_REPLIES = [
+    "Hehe, you’re cute 😘",
+    "Aww that’s sweet 💞",
+    "Tell me more, I’m listening 👀",
+    "Haha, you make me smile 😍",
+    "You’re too adorable 💋",
+    "Really? That’s interesting 😉",
+    "You’re fun to talk to 💕",
+    "I love this chat already 😌",
+    "Haha stop it, you’re making me blush 🥰",
+]
 
-# Keywords triggering instant 119 upgrade
-FLIRTY_KEYWORDS = ["horny", "flirty", "sex", "nude", "intimate"]  
+# ===================== DATA STORAGE =====================
+user_data = {}
 
-# VIP users example
-VIP_USERS = [123456789]  # Telegram user_ids
-
-# ---------------- TELEGRAM HANDLERS ---------------- #
+# ===================== COMMAND HANDLER =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if user_id in VIP_USERS:
-        USER_STATS[user_id] = {"type": "vip", "msg_count": 0, "img_count": 0}
-        await update.message.reply_text("Welcome VIP! Enjoy unlimited chatting 😎")
-    else:
-        # default: new user = 49 pack
-        USER_STATS[user_id] = {"type": "49", "msg_count": 0, "img_count": 0}
-        await update.message.reply_text(
-            "Welcome! You have 25 messages + 2 images. Upgrade to 119 pack for full access."
-        )
+    user_data[user_id] = {"messages": 0, "images": 0}
+    await update.message.reply_text(
+        "💞 Welcome to Friendify AI!\n"
+        "You can chat with your AI partner here.\n\n"
+        "You have 25 free messages & 2 free image responses.\n"
+        f"To unlock unlimited messages, upgrade here 👉 {UPGRADE_LINK}"
+    )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send messages or images to chat with Friendify AI!")
-
+# ===================== MESSAGE HANDLER =====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    text = update.message.text.lower() if update.message.text else ""
-    user = USER_STATS.get(user_id, {"type":"49","msg_count":0,"img_count":0})
+    text = update.message.text
 
-    # Detect flirty keywords for 49 pack users
-    if user["type"] in ["49"] and any(word in text for word in FLIRTY_KEYWORDS):
+    if user_id not in user_data:
+        user_data[user_id] = {"messages": 0, "images": 0}
+
+    user_info = user_data[user_id]
+
+    # Check free message limit
+    if user_info["messages"] >= FREE_MESSAGE_LIMIT:
         await update.message.reply_text(
-            f"⚠️ For intimate/flirty messages, please upgrade to 119 pack: {PACK_119_LINK}"
+            f"💔 You’ve reached your 25 free messages.\n\n"
+            f"Upgrade now for unlimited chat & more images 💕\n"
+            f"{UPGRADE_LINK}"
         )
         return
 
-    # Count messages for 49 pack
-    if user["type"] == "49" and update.message.text:
-        user["msg_count"] += 1
+    # Increment message count
+    user_info["messages"] += 1
 
-    # Count images
-    if update.message.photo:
-        user["img_count"] += 1
+    # Random friendly AI reply
+    reply = random.choice(BASIC_REPLIES)
+    await update.message.reply_text(f"💬 Friendify AI: {reply}")
 
-    # Check if 49 pack limits reached (25 msgs + 2 images)
-    if user["type"] == "49" and (user["msg_count"] > 25 or user["img_count"] > 2):
+# ===================== IMAGE HANDLER =====================
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    if user_id not in user_data:
+        user_data[user_id] = {"messages": 0, "images": 0}
+
+    user_info = user_data[user_id]
+
+    if user_info["images"] >= FREE_IMAGE_LIMIT:
         await update.message.reply_text(
-            f"🎁 You have reached your 49 pack limit. Upgrade to 119 pack to continue: {PACK_119_LINK}"
+            f"📸 You’ve used your 2 free images.\n\n"
+            f"Upgrade to unlock more images & romantic content 💕\n"
+            f"{UPGRADE_LINK}"
         )
         return
 
-    # Select reply
-    if user["type"] == "vip":
-        reply = random.choice(VIP_REPLIES)
-    else:
-        reply = random.choice(BASIC_REPLIES)
+    user_info["images"] += 1
+    await update.message.reply_text("😍 Wow! You look amazing in this one!")
 
-    # Save updated stats
-    USER_STATS[user_id] = user
+# ===================== ADD HANDLERS =====================
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    await update.message.reply_text(reply)
+# ===================== FLASK ROUTES =====================
+@app.route("/")
+def home():
+    return "Friendify AI Bot is live 💖"
 
-# ---------------- TELEGRAM BOT MAIN FUNCTION ---------------- #
-async def run_bot():
-    print("🚀 Starting Friendify Bot...")
-    app = ApplicationBuilder().token(TOKEN).build()
+@app.route(f"/{TOKEN}", methods=["POST"])
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+    await telegram_app.process_update(update)
+    return "ok"
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_message))  # handle images
-
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    print("🤖 Bot is polling...")
-    await asyncio.Event().wait()  # Keep alive
-
-# ---------------- SIMPLE HTTP SERVER FOR RENDER ---------------- #
-PORT = int(os.environ.get("PORT", 10000))
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Friendify Bot is running!")
-
-def start_server():
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"🌐 HTTP server running on port {PORT}")
-    server.serve_forever()
-
-threading.Thread(target=start_server, daemon=True).start()
-
-# ---------------- ENTRY POINT ---------------- #
+# ===================== MAIN =====================
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    loop.create_task(run_bot())
-    loop.run_forever()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)

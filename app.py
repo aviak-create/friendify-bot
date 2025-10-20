@@ -47,48 +47,59 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "You have 25 free messages & 2 free image responses.\n"
         f"To unlock unlimited messages, upgrade here 👉 {UPGRADE_LINK}"
     )
+    logging.info(f"/start used by {user_id}")
 
 # ===================== MESSAGE HANDLER =====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    text = update.message.text
+    try:
+        user_id = update.message.from_user.id
+        text = update.message.text
+        logging.info(f"Message from {user_id}: {text}")
 
-    if user_id not in user_data:
-        user_data[user_id] = {"messages": 0, "images": 0}
+        if user_id not in user_data:
+            user_data[user_id] = {"messages": 0, "images": 0}
 
-    user_info = user_data[user_id]
+        user_info = user_data[user_id]
 
-    if user_info["messages"] >= FREE_MESSAGE_LIMIT:
-        await update.message.reply_text(
-            f"💔 You’ve reached your 25 free messages.\n\n"
-            f"Upgrade now for unlimited chat & more images 💕\n"
-            f"{UPGRADE_LINK}"
-        )
-        return
+        if user_info["messages"] >= FREE_MESSAGE_LIMIT:
+            await update.message.reply_text(
+                f"💔 You’ve reached your 25 free messages.\n\n"
+                f"Upgrade now for unlimited chat & more images 💕\n"
+                f"{UPGRADE_LINK}"
+            )
+            return
 
-    user_info["messages"] += 1
-    reply = random.choice(BASIC_REPLIES)
-    await update.message.reply_text(f"💬 Friendify AI: {reply}")
+        user_info["messages"] += 1
+        reply = random.choice(BASIC_REPLIES)
+        await update.message.reply_text(f"💬 Friendify AI: {reply}")
+
+    except Exception as e:
+        logging.error(f"Error in handle_message: {e}")
 
 # ===================== IMAGE HANDLER =====================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+    try:
+        user_id = update.message.from_user.id
+        logging.info(f"Photo received from {user_id}")
 
-    if user_id not in user_data:
-        user_data[user_id] = {"messages": 0, "images": 0}
+        if user_id not in user_data:
+            user_data[user_id] = {"messages": 0, "images": 0}
 
-    user_info = user_data[user_id]
+        user_info = user_data[user_id]
 
-    if user_info["images"] >= FREE_IMAGE_LIMIT:
-        await update.message.reply_text(
-            f"📸 You’ve used your 2 free images.\n\n"
-            f"Upgrade to unlock more images & romantic content 💕\n"
-            f"{UPGRADE_LINK}"
-        )
-        return
+        if user_info["images"] >= FREE_IMAGE_LIMIT:
+            await update.message.reply_text(
+                f"📸 You’ve used your 2 free images.\n\n"
+                f"Upgrade to unlock more images & romantic content 💕\n"
+                f"{UPGRADE_LINK}"
+            )
+            return
 
-    user_info["images"] += 1
-    await update.message.reply_text("😍 Wow! You look amazing in this one!")
+        user_info["images"] += 1
+        await update.message.reply_text("😍 Wow! You look amazing in this one!")
+
+    except Exception as e:
+        logging.error(f"Error in handle_photo: {e}")
 
 # ===================== ADD HANDLERS =====================
 telegram_app.add_handler(CommandHandler("start", start))
@@ -102,13 +113,18 @@ def home():
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-    """Telegram will POST updates here."""
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    # Run async process_update safely
-    asyncio.run(telegram_app.process_update(update))
-    return "ok"
+    """Telegram webhook route"""
+    try:
+        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+        # Schedule async processing without blocking Flask
+        asyncio.create_task(telegram_app.process_update(update))
+        return "ok"
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return "Error", 500
 
 # ===================== MAIN =====================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
+    logging.info(f"Starting Flask app on port {port}")
     app.run(host="0.0.0.0", port=port)

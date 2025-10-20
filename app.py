@@ -1,6 +1,7 @@
 import os
 import random
 import logging
+import asyncio
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -57,7 +58,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_info = user_data[user_id]
 
-    # Check free message limit
     if user_info["messages"] >= FREE_MESSAGE_LIMIT:
         await update.message.reply_text(
             f"💔 You’ve reached your 25 free messages.\n\n"
@@ -66,10 +66,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Increment message count
     user_info["messages"] += 1
-
-    # Random friendly AI reply
     reply = random.choice(BASIC_REPLIES)
     await update.message.reply_text(f"💬 Friendify AI: {reply}")
 
@@ -104,9 +101,11 @@ def home():
     return "Friendify AI Bot is live 💖"
 
 @app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
+def webhook():
+    """Telegram will POST updates here."""
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    await telegram_app.process_update(update)
+    # Run async process_update safely
+    asyncio.run(telegram_app.process_update(update))
     return "ok"
 
 # ===================== MAIN =====================

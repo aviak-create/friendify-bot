@@ -1,161 +1,180 @@
 import os
 import random
-import logging
 from flask import Flask, request
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Bot, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from openai import OpenAI
+from datetime import datetime
 
-# ===================== BOT CONFIG =====================
-TOKEN = "8286419006:AAFQ7Pj0qDvt4wc7CdjdgOq59ZGS5pI5pUo"
-UPGRADE_LINK = "https://rzp.io/rzp/D0H2ymY7"
-FREE_TEXT_LIMIT = 25
-FREE_IMAGE_LIMIT = 2
-VIP_TEXT_LIMIT = 9999  # unlimited
-VIP_IMAGE_LIMIT = 5
+# ----------------------------
+# Configuration
+# ----------------------------
+TOKEN = os.getenv("TOKEN")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-# ===================== FLASK APP =====================
+bot = Bot(token=TOKEN)
 app = Flask(__name__)
 
-# ===================== TELEGRAM APP =====================
-telegram_app = Application.builder().token(TOKEN).build()
+# Hugging Face client (OpenAI-compatible)
+client = OpenAI(
+    base_url="https://router.huggingface.co/v1",
+    api_key=HF_TOKEN,
+)
 
-# ===================== LOGGING =====================
-logging.basicConfig(level=logging.INFO)
+# ----------------------------
+# In-memory User Tracker
+# ----------------------------
+USERS = {}  # user_id: {"messages": int, "images": int, "is_paid": bool, "last_reset": date}
 
-# ===================== DATA FILES =====================
-DATA_FOLDER = "data"
-BASIC_TEXT_FILE = os.path.join(DATA_FOLDER, "basic.txt")
-VIP_TEXT_FILE = os.path.join(DATA_FOLDER, "vip.txt")
-BASIC_IMAGES_FILE = os.path.join(DATA_FOLDER, "images_basic.txt")
-VIP_IMAGES_FILE = os.path.join(DATA_FOLDER, "images_vip.txt")
+def reset_daily_limit(user_id):
+    today = datetime.now().date()
+    if USERS[user_id]["last_reset"] != today:
+        USERS[user_id]["messages"] = 0
+        USERS[user_id]["images"] = 0
+        USERS[user_id]["last_reset"] = today
 
-def load_file(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
-    return []
+# ----------------------------
+# Replies
+# ----------------------------
+BASIC_REPLIES = [
+    "Hey cutie 😍 how’s your day?",
+    "You always make me smile 🥰",
+    "Haha, you’re so sweet 😚",
+    "Aww… I like chatting with you 💞",
+    "What are you doing right now baby? 😉",
+    "I love when you talk to me like that 😏",
+    "Say ‘photo’ if you want me to send a selfie 💋",
+]
 
-BASIC_REPLIES = load_file(BASIC_TEXT_FILE)
-VIP_REPLIES = load_file(VIP_TEXT_FILE)
-BASIC_IMAGES = load_file(BASIC_IMAGES_FILE)
-VIP_IMAGES = load_file(VIP_IMAGES_FILE)
+HORNY_WORDS = ["horny", "nude", "sex", "boobs", "ass", "hot", "kiss", "naked", "romance"]
 
-# ===================== DATA STORAGE =====================
-# user_data structure: {user_id: {"tier": "free"/"vip", "texts": int, "images": int}}
-user_data = {}
+PAYMENT_LINK = "https://rzp.io/rzp/D0H2ymY7"  # ₹119 payment page
 
-# ===================== KEYWORDS =====================
-FLIRTY_KEYWORDS = ["sexy", "horny", "flirt", "kiss", "baby"]  # lowercase
+# ----------------------------
+# AI Text Generation
+# ----------------------------
+async def chat_with_ai(prompt: str) -> str:
+    try:
+        completion = client.chat.completions.create(
+            model="meta-llama/Meta-Llama-3-8B-Instruct",
+            messages=[
+                {"role": "system", "content": "You are Ria, a flirty, romantic Indian girlfriend who speaks playfully and emotionally."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=120,
+        )
+        return completion.choices[0].message["content"]
+    except Exception as e:
+        print("AI error:", e)
+        return random.choice(BASIC_REPLIES)
 
-# ===================== COMMAND HANDLER =====================
+# ----------------------------
+# AI Image Generation
+# ----------------------------
+async def generate_image(prompt: str):
+    try:
+        result = client.images.generate(
+            model="black-forest-labs/FLUX.1-dev",
+            prompt=prompt,
+            size="512x512",
+            n=1
+        )
+        return result.data[0].url
+    except Exception as e:
+        print("Image generation error:", e)
+        return None
+
+# ----------------------------
+# Start Command
+# ----------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    user_data[user_id] = {"tier": "free", "texts": 0, "images": 0}
+    USERS[user_id] = {"messages": 0, "images": 0, "is_paid": False, "last_reset": datetime.now().date()}
+
     await update.message.reply_text(
-        "💞 Welcome to Friendify AI!\n"
-        "You need to pay 49₹ to start chatting.\n"
-        f"Upgrade here 👉 {UPGRADE_LINK}"
+        "Hey there 😘 I’m *Ria*, your AI girlfriend 💋\n\n"
+        "You have *25 messages* and *2 photos* free 💌\n"
+        "To unlock *unlimited chats + 8 photos/day*, pay ₹119 👉 [Upgrade Now](" + PAYMENT_LINK + ")",
+        parse_mode="Markdown",
     )
 
-# ===================== MESSAGE HANDLER =====================
+# ----------------------------
+# Message Handler
+# ----------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text.lower()
 
-    if user_id not in user_data:
-        # Force user to pay first
+    if user_id not in USERS:
+        USERS[user_id] = {"messages": 0, "images": 0, "is_paid": False, "last_reset": datetime.now().date()}
+
+    reset_daily_limit(user_id)
+
+    user = USERS[user_id]
+
+    # Detect explicit words
+    if any(word in text for word in HORNY_WORDS) and not user["is_paid"]:
         await update.message.reply_text(
-            f"💔 You cannot chat without subscribing.\nPay 49₹ here 👉 {UPGRADE_LINK}"
+            "That’s getting a bit *hot*, baby 🔥\n\nTo continue this type of chat, please pay ₹119 👇\n" + PAYMENT_LINK,
+            parse_mode="Markdown",
         )
         return
 
-    user_info = user_data[user_id]
+    # Handle 'photo' requests
+    if any(word in text for word in ["photo", "pic", "image", "selfie"]):
+        if not user["is_paid"] and user["images"] >= 2:
+            await update.message.reply_text(
+                "You’ve reached your *2 free photos* limit 💔\nUnlock 8 daily photos for ₹119 👉 " + PAYMENT_LINK,
+                parse_mode="Markdown",
+            )
+            return
+        elif user["is_paid"] and user["images"] >= 8:
+            await update.message.reply_text("You’ve reached your 8 image limit for today 🥺")
+            return
 
-    # Check if flirty keyword used
-    if any(k in text for k in FLIRTY_KEYWORDS):
-        user_info["tier"] = "vip"
-        user_info["texts"] = 0
-        user_info["images"] = 0
+        user["images"] += 1
+        await update.message.reply_chat_action("upload_photo")
+        img_url = await generate_image("beautiful Indian girlfriend selfie, smiling, romantic mood, cinematic lighting")
+        if img_url:
+            await update.message.reply_photo(photo=img_url, caption="Here’s a pic just for you 💕")
+        else:
+            await update.message.reply_text("Oops! Couldn’t create a photo right now 😢")
+        return
+
+    # Message limit check
+    if not user["is_paid"] and user["messages"] >= 25:
         await update.message.reply_text(
-            f"🔥 Flirty message detected! You've unlocked VIP for today.\n{UPGRADE_LINK}"
+            "You’ve used all *25 free messages*, darling 😘\nUpgrade for unlimited chats + photos 💞\n👉 " + PAYMENT_LINK,
+            parse_mode="Markdown",
         )
         return
 
-    # Determine tier limits
-    if user_info["tier"] == "free":
-        limit_texts = FREE_TEXT_LIMIT
-        replies_list = BASIC_REPLIES
-    else:
-        limit_texts = VIP_TEXT_LIMIT
-        replies_list = VIP_REPLIES
-
-    # Check text limit
-    if user_info["texts"] >= limit_texts:
-        await update.message.reply_text(
-            f"💔 You’ve reached your daily text limit.\nUpgrade VIP for more 💕\n{UPGRADE_LINK}"
-        )
-        return
-
-    # Increment text counter and reply
-    user_info["texts"] += 1
-    reply = random.choice(replies_list)
+    user["messages"] += 1
+    reply = await chat_with_ai(text)
     await update.message.reply_text(reply)
 
-# ===================== IMAGE HANDLER =====================
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    if user_id not in user_data:
-        await update.message.reply_text(
-            f"💔 You cannot send images without subscribing.\nPay 49₹ here 👉 {UPGRADE_LINK}"
-        )
-        return
-
-    user_info = user_data[user_id]
-
-    if user_info["tier"] == "free":
-        limit_images = FREE_IMAGE_LIMIT
-        images_list = BASIC_IMAGES
-    else:
-        limit_images = VIP_IMAGE_LIMIT
-        images_list = VIP_IMAGES
-
-    if user_info["images"] >= limit_images:
-        await update.message.reply_text(
-            f"📸 You’ve reached your daily image limit.\nUpgrade VIP for more 💕\n{UPGRADE_LINK}"
-        )
-        return
-
-    # Increment image counter and reply with random image
-    user_info["images"] += 1
-    if images_list:
-        reply_image = random.choice(images_list)
-        await update.message.reply_text(f"Here you go! {reply_image}")
-    else:
-        await update.message.reply_text("😍 Wow! You look amazing!")
-
-# ===================== ADD HANDLERS =====================
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# ===================== FLASK WEBHOOK =====================
-@app.route("/")
-def home():
-    return "Friendify AI Bot is live 💖"
-
+# ----------------------------
+# Flask Webhook Endpoint
+# ----------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-    from asyncio import get_event_loop
-
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    loop = get_event_loop()
-    loop.create_task(telegram_app.process_update(update))
+    update = Update.de_json(request.get_json(force=True), bot)
+    application.create_task(application.process_update(update))
     return "ok"
 
-# ===================== MAIN =====================
+@app.route("/")
+def home():
+    return "💖 FriendifyAI Bot is Live on Render!"
+
+# ----------------------------
+# Telegram App Setup
+# ----------------------------
+application = ApplicationBuilder().token(TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# ----------------------------
+# Run on Render
+# ----------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    logging.info(f"Starting bot on port {port}")
-    telegram_app.bot.set_webhook(f"https://friendify-bot.onrender.com/{TOKEN}")
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

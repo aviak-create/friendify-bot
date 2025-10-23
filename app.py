@@ -9,8 +9,8 @@ from datetime import datetime
 # ----------------------------
 # Configuration
 # ----------------------------
-TOKEN = os.getenv("TOKEN")
-HF_TOKEN = os.getenv("HF_TOKEN")
+TOKEN = os.getenv("TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")  # Replace or use Render Environment Variable
+HF_TOKEN = os.getenv("HF_TOKEN", "YOUR_HUGGINGFACE_TOKEN_HERE")
 
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
@@ -27,6 +27,7 @@ client = OpenAI(
 USERS = {}  # user_id: {"messages": int, "images": int, "is_paid": bool, "last_reset": date}
 
 def reset_daily_limit(user_id):
+    """Resets message/image limits daily."""
     today = datetime.now().date()
     if USERS[user_id]["last_reset"] != today:
         USERS[user_id]["messages"] = 0
@@ -48,12 +49,13 @@ BASIC_REPLIES = [
 
 HORNY_WORDS = ["horny", "nude", "sex", "boobs", "ass", "hot", "kiss", "naked", "romance"]
 
-PAYMENT_LINK = "https://rzp.io/rzp/D0H2ymY7"  # ₹119 payment page
+PAYMENT_LINK = "https://rzp.io/rzp/D0H2ymY7"  # ₹119 payment link
 
 # ----------------------------
 # AI Text Generation
 # ----------------------------
 async def chat_with_ai(prompt: str) -> str:
+    """Generates chat reply using Hugging Face Llama model."""
     try:
         completion = client.chat.completions.create(
             model="meta-llama/Meta-Llama-3-8B-Instruct",
@@ -72,6 +74,7 @@ async def chat_with_ai(prompt: str) -> str:
 # AI Image Generation
 # ----------------------------
 async def generate_image(prompt: str):
+    """Generates romantic selfie image using FLUX.1 model."""
     try:
         result = client.images.generate(
             model="black-forest-labs/FLUX.1-dev",
@@ -85,7 +88,7 @@ async def generate_image(prompt: str):
         return None
 
 # ----------------------------
-# Start Command
+# /start Command
 # ----------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -99,7 +102,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ----------------------------
-# Message Handler
+# Handle Messages
 # ----------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -109,10 +112,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         USERS[user_id] = {"messages": 0, "images": 0, "is_paid": False, "last_reset": datetime.now().date()}
 
     reset_daily_limit(user_id)
-
     user = USERS[user_id]
 
-    # Detect explicit words
+    # Detect explicit/hot words
     if any(word in text for word in HORNY_WORDS) and not user["is_paid"]:
         await update.message.reply_text(
             "That’s getting a bit *hot*, baby 🔥\n\nTo continue this type of chat, please pay ₹119 👇\n" + PAYMENT_LINK,
@@ -154,7 +156,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 # ----------------------------
-# Flask Webhook Endpoint
+# Flask Webhook for Render
 # ----------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():

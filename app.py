@@ -1,68 +1,65 @@
 import os
 from flask import Flask, request
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-from openai import OpenAI
+import requests
+from dotenv import load_dotenv
 
-# ------------------ ENVIRONMENT VARIABLES ------------------
-TOKEN = os.getenv("BOT_TOKEN")
+# Load .env file if running locally or on Render
+load_dotenv()
+
+# Fetch tokens
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-if not TOKEN or not HF_TOKEN:
+# Check for missing tokens
+if not BOT_TOKEN or not HF_TOKEN:
     raise ValueError("Missing BOT_TOKEN or HF_TOKEN environment variable.")
 
-# ------------------ OPENAI (HUGGINGFACE GATEWAY) ------------------
-client = OpenAI(
-    base_url="https://router.huggingface.co/v1",
-    api_key=HF_TOKEN
-)
+# Telegram API URL
+TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ------------------ TELEGRAM APP SETUP ------------------
+# Flask app
 app = Flask(__name__)
-application = ApplicationBuilder().token(TOKEN).build()
-
-
-# ------------------ HANDLERS ------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Hey there! I’m FriendifyAI — your friendly AI companion.")
-
-
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-
-    try:
-        response = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a sweet and caring AI friend named Ria. Reply naturally."},
-                {"role": "user", "content": user_text}
-            ]
-        )
-        reply_text = response.choices[0].message["content"]
-    except Exception as e:
-        reply_text = "Oops! Something went wrong 💔"
-
-    await update.message.reply_text(reply_text)
-
-
-# Register handlers
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-
-
-# ------------------ FLASK ROUTES ------------------
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put(update)
-    return "ok", 200
-
 
 @app.route("/", methods=["GET"])
 def home():
-    return "🤖 FriendifyAI Bot is Live!", 200
+    return "🤖 FriendifyAI Bot is running successfully on Render!"
 
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = request.get_json()
 
-# ------------------ MAIN ------------------
+    if "message" in update and "text" in update["message"]:
+        chat_id = update["message"]["chat"]["id"]
+        user_text = update["message"]["text"]
+
+        # Hugging Face API request
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+        payload = {"inputs": user_text}
+
+        try:
+            hf_response = requests.post(
+                "https://api-inference.huggingface.co/models/gpt2",
+                headers=headers,
+                json=payload,
+                timeout=15
+            )
+            result = hf_response.json()
+
+            # Extract response text safely
+            if isinstance(result, list) and len(result) > 0 and "generated_text" in result[0]:
+                reply = result[0]["generated_text"]
+            else:
+                reply = "I'm here! Let's chat ❤️"
+
+        except Exception as e:
+            reply = f"Error: {e}"
+
+        # Send reply back to Telegram
+        send_url = f"{TELEGRAM_URL}/sendMessage"
+        requests.post(send_url, json={"chat_id": chat_id, "text": reply})
+
+    return "ok"
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    port = int(os.environ.get("PORT", 10000))  # Render uses dynamic ports
+    app.run(host="0.0.0.0", port=port)

@@ -1,51 +1,46 @@
-import os
-import logging
 from flask import Flask, request
+import requests
+import os
 from openai import OpenAI
-from telegram import Bot, Update
-from telegram.ext import CommandHandler, MessageHandler, Filters, Dispatcher
 
 app = Flask(__name__)
 
-# Logging
-logging.basicConfig(level=logging.INFO)
-
 # Environment Variables
-TOKEN = os.environ.get("BOT_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-PORT = int(os.environ.get("PORT", 8080))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-bot = Bot(token=TOKEN)
+if not BOT_TOKEN or not OPENAI_API_KEY:
+    raise ValueError("Missing BOT_TOKEN or OPENAI_API_KEY environment variable.")
+
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-# Flask route for Telegram webhook
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    dp = Dispatcher(bot, None, workers=0)
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    dp.process_update(update)
-    return "ok"
-
-# Handle messages
-def handle_message(update, context=None):
-    user_text = update.message.text
-    chat_id = update.message.chat.id
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": user_text}],
-        )
-        reply = response.choices[0].message["content"]
-    except Exception as e:
-        reply = "⚠️ Sorry, something went wrong."
-
-    bot.send_message(chat_id=chat_id, text=reply)
+TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Friendify AI Telegram Bot is live!"
+    return "✅ FriendifyAI bot is running successfully!"
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        user_message = data["message"].get("text", "")
+
+        if user_message:
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are Ria, a sweet and friendly AI companion."},
+                        {"role": "user", "content": user_message}
+                    ]
+                )
+                reply = response.choices[0].message.content
+            except Exception as e:
+                reply = "⚠️ Error: " + str(e)
+
+            requests.post(TELEGRAM_URL, json={"chat_id": chat_id, "text": reply})
+    return "OK"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))

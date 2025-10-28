@@ -1,65 +1,73 @@
 import os
+import logging
 from flask import Flask, request
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, MessageHandler, Filters, CallbackContext
 import requests
-from dotenv import load_dotenv
 
-# Load .env file if running locally or on Render
-load_dotenv()
-
-# Fetch tokens
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# --- Environment Variables ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-# Check for missing tokens
-if not BOT_TOKEN or not HF_TOKEN:
-    raise ValueError("Missing BOT_TOKEN or HF_TOKEN environment variable.")
+if not TELEGRAM_TOKEN or not HF_TOKEN:
+    raise ValueError("Missing TELEGRAM_TOKEN or HF_TOKEN environment variables.")
 
-# Telegram API URL
-TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-# Flask app
+# --- Flask & Telegram Bot Setup ---
 app = Flask(__name__)
+bot = Bot(token=TELEGRAM_TOKEN)
 
+# Logging setup for debugging
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+# --- Hugging Face AI Reply Function ---
+def generate_ai_reply(user_message: str) -> str:
+    """
+    Sends the user message to Hugging Face model and returns the generated reply.
+    """
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    data = {
+        "inputs": f"You are Ria, a caring and romantic AI girlfriend. Reply warmly to: {user_message}",
+    }
+    try:
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/facebook/blenderbot-400M-distill",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        result = response.json()
+        if isinstance(result, list) and "generated_text" in result[0]:
+            return result[0]["generated_text"]
+        else:
+            return "💞 I'm here for you, darling. Tell me more!"
+    except Exception as e:
+        logging.error(f"Hugging Face API error: {e}")
+        return "🌸 Something went wrong, love!"
+
+# --- Telegram Message Handler ---
+def handle_message(update: Update, context: CallbackContext):
+    user_text = update.message.text
+    reply_text = generate_ai_reply(user_text)
+    context.bot.send_message(chat_id=update.effective_chat.id, text=reply_text)
+
+# --- Flask Webhook Route ---
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "ok", 200
+
+# --- Home Route ---
 @app.route("/", methods=["GET"])
 def home():
-    return "🤖 FriendifyAI Bot is running successfully on Render!"
+    return "💖 FriendifyAI Bot is Live on Railway!"
 
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = request.get_json()
+# --- Telegram Dispatcher Setup ---
+from telegram.ext import Dispatcher
+dispatcher = Dispatcher(bot, None, use_context=True)
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-    if "message" in update and "text" in update["message"]:
-        chat_id = update["message"]["chat"]["id"]
-        user_text = update["message"]["text"]
-
-        # Hugging Face API request
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        payload = {"inputs": user_text}
-
-        try:
-            hf_response = requests.post(
-                "https://api-inference.huggingface.co/models/gpt2",
-                headers=headers,
-                json=payload,
-                timeout=15
-            )
-            result = hf_response.json()
-
-            # Extract response text safely
-            if isinstance(result, list) and len(result) > 0 and "generated_text" in result[0]:
-                reply = result[0]["generated_text"]
-            else:
-                reply = "I'm here! Let's chat ❤️"
-
-        except Exception as e:
-            reply = f"Error: {e}"
-
-        # Send reply back to Telegram
-        send_url = f"{TELEGRAM_URL}/sendMessage"
-        requests.post(send_url, json={"chat_id": chat_id, "text": reply})
-
-    return "ok"
-
+# --- Run Flask App ---
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Render uses dynamic ports
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
